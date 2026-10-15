@@ -4,6 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module.js';
 
+// Uses the real database: start it first with `docker compose up -d` at the repo root.
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
 
@@ -16,11 +17,11 @@ describe('AppController (e2e)', () => {
     await app.init();
   });
 
-  it('/ (GET)', () => {
+  it('/health (GET) reaches the database', () => {
     return request(app.getHttpServer())
-      .get('/')
+      .get('/health')
       .expect(200)
-      .expect('Hello World!');
+      .expect({ status: 'ok', database: 'up' });
   });
 
   afterEach(async () => {

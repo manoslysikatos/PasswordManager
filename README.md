@@ -29,7 +29,11 @@ docker compose stop         # stop (data is kept)
 
 ```bash
 cd backend
-npm install
-npm run build
-npm test
+npm install           # also generates the Prisma client
+npm run db:deploy     # create the tables (database must be running)
+npm run start:dev     # http://localhost:3000/health -> {"status":"ok","database":"up"}
+npm test              # unit tests
+npm run test:e2e      # end-to-end tests (use the real database)
 ```
+
+The backend reads its settings from the repo-root `.env`.
