@@ -15,11 +15,21 @@ An enterprise password manager with role-based access control and zero-knowledge
 
 Requirements: Node.js 22+, npm 11+, Docker.
 
+### Database
+
+PostgreSQL 17 runs in Docker. It listens on localhost only.
+
+```bash
+cp .env.example .env        # then set your own POSTGRES_PASSWORD (and DATABASE_URL)
+docker compose up -d        # start; data is kept in the "pgdata" volume
+docker compose stop         # stop (data is kept)
+```
+
+### Backend
+
 ```bash
 cd backend
 npm install
 npm run build
 npm test
 ```
-
-Database setup with Docker Compose will be added next.
