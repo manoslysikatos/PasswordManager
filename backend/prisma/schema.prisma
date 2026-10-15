@@ -1,0 +1,299 @@
+// Database schema of the password manager.
+// Zero-knowledge: every secret column holds ciphertext produced in the browser,
+// formatted as "v1.<iv>.<ciphertext>" (base64). The server never sees keys or passwords.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ─────────────────────────────────────────────────
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DEACTIVATED
+}
+
+enum Permission {
+  MANAGE_USERS
+  MANAGE_ROLES
+  CREATE_GROUPS
+  SHARE_CREDENTIALS
+  ROTATE_CREDENTIALS
+  VIEW_AUDIT
+  ORG_ADMIN
+}
+
+enum VaultType {
+  SHARED
+  PERSONAL
+}
+
+enum AccessLevel {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+enum AuditAction {
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  USER_INVITED
+  USER_ACTIVATED
+  USER_DEACTIVATED
+  USER_RECOVERED
+  ROLE_ASSIGNED
+  ROLE_REMOVED
+  VAULT_CREATED
+  VAULT_SHARED
+  VAULT_ACCESS_REVOKED
+  CREDENTIAL_CREATED
+  CREDENTIAL_VIEWED
+  CREDENTIAL_UPDATED
+  CREDENTIAL_DELETED
+  CREDENTIAL_SHARED
+  CREDENTIAL_ROTATED
+}
+
+// ─── Users ─────────────────────────────────────────────────
+
+model User {
+  id     String     @id @default(uuid()) @db.Uuid
+  email  String     @unique
+  name   String
+  status UserStatus @default(INVITED)
+
+  // Empty until the invitation is accepted and the browser creates the keys
+  publicKey           String? // RSA-OAEP public key (plain)
+  encryptedPrivateKey String? // private key, locked in the browser with a key derived from the master password
+  kdfSalt             String? // Argon2id salt (not secret)
+  kdfParams           Json? // { version, memory, iterations, parallelism }
+  authVerifierHash    String? // server-side hash of the HKDF login verifier, never the master password
+
+  deactivatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  roles            UserRole[]
+  invitations      Invitation[]
+  refreshTokens    RefreshToken[]
+  orgKeyGrant      OrgKeyGrant?
+  ownedVaults      Vault[]
+  vaultKeys        VaultKey[]
+  credentialShares CredentialShare[]
+
+  @@map("users")
+}
+
+model Invitation {
+  id          String    @id @default(uuid()) @db.Uuid
+  user        User      @relation(fields: [userId], references: [id])
+  userId      String    @db.Uuid
+  tokenHash   String    @unique // only the hash of the link token is stored
+  invitedById String    @db.Uuid
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@map("invitations")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  user      User      @relation(fields: [userId], references: [id])
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─── Roles (NIST RBAC: users → roles → permissions) ────────
+
+model Role {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @unique
+  description String?
+
+  users       UserRole[]
+  permissions RolePermission[]
+  vaultGrants VaultRoleGrant[]
+  vaultKeys   VaultKey[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  user   User   @relation(fields: [userId], references: [id])
+  userId String @db.Uuid
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  roleId String @db.Uuid
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  roleId     String     @db.Uuid
+  permission Permission
+
+  @@id([roleId, permission])
+  @@map("role_permissions")
+}
+
+// ─── Organization key (admins can open every vault) ────────
+
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  publicKey String // org RSA-OAEP public key
+  createdAt DateTime @default(now())
+
+  @@map("organization")
+}
+
+model OrgKeyGrant {
+  user                   User     @relation(fields: [userId], references: [id])
+  userId                 String   @id @db.Uuid
+  encryptedOrgPrivateKey String // org private key, locked with this admin's public key
+  grantedById            String   @db.Uuid
+  grantedAt              DateTime @default(now())
+
+  @@map("org_key_grants")
+}
+
+// ─── Vaults (groups) and credentials ───────────────────────
+
+model Vault {
+  id                   String    @id @default(uuid()) @db.Uuid
+  name                 String
+  type                 VaultType
+  owner                User      @relation(fields: [ownerId], references: [id])
+  ownerId              String    @db.Uuid
+  orgEncryptedVaultKey String // vault key, locked with the org public key
+  createdAt            DateTime  @default(now())
+
+  roleGrants  VaultRoleGrant[]
+  keys        VaultKey[]
+  credentials Credential[]
+
+  @@index([ownerId])
+  @@map("vaults")
+}
+
+// Policy: "role X may use vault Y". The browser turns it into VaultKey rows.
+model VaultRoleGrant {
+  vault       Vault       @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+  vaultId     String      @db.Uuid
+  role        Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  roleId      String      @db.Uuid
+  accessLevel AccessLevel // EDITOR or VIEWER
+  grantedById String      @db.Uuid
+  grantedAt   DateTime    @default(now())
+
+  @@id([vaultId, roleId])
+  @@index([roleId])
+  @@map("vault_role_grants")
+}
+
+// Cryptographic access: the vault key locked for one user.
+model VaultKey {
+  id                String      @id @default(uuid()) @db.Uuid
+  vault             Vault       @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+  vaultId           String      @db.Uuid
+  user              User        @relation(fields: [userId], references: [id])
+  userId            String      @db.Uuid
+  viaRole           Role?       @relation(fields: [viaRoleId], references: [id], onDelete: Cascade)
+  viaRoleId         String?     @db.Uuid // null = direct access
+  encryptedVaultKey String // vault key, locked with this user's public key
+  accessLevel       AccessLevel
+  grantedById       String      @db.Uuid
+  grantedAt         DateTime    @default(now())
+
+  // The migration makes this NULLS NOT DISTINCT so direct access (viaRoleId = null) cannot repeat
+  @@unique([vaultId, userId, viaRoleId])
+  @@index([userId])
+  @@map("vault_keys")
+}
+
+model Credential {
+  id                String   @id @default(uuid()) @db.Uuid
+  vault             Vault    @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+  vaultId           String   @db.Uuid
+  title             String // plain (decision 0012)
+  username          String? // plain
+  url               String? // plain
+  encryptedItemKey  String // item key, locked with the vault key
+  encryptedPassword String // AES-GCM with the item key
+  encryptedNotes    String?
+  createdById       String   @db.Uuid
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  shares        CredentialShare[]
+  rotationTasks RotationTask[]
+
+  @@index([vaultId])
+  @@map("credentials")
+}
+
+// Access to a single credential, without its vault.
+model CredentialShare {
+  credential       Credential  @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  credentialId     String      @db.Uuid
+  user             User        @relation(fields: [userId], references: [id])
+  userId           String      @db.Uuid
+  encryptedItemKey String // item key, locked with this user's public key
+  accessLevel      AccessLevel // EDITOR or VIEWER
+  grantedById      String      @db.Uuid
+  grantedAt        DateTime    @default(now())
+
+  @@id([credentialId, userId])
+  @@index([userId])
+  @@map("credential_shares")
+}
+
+// ─── Security and history ──────────────────────────────────
+
+// "This credential must be changed at its service because someone lost access."
+model RotationTask {
+  id            String     @id @default(uuid()) @db.Uuid
+  credential    Credential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  credentialId  String     @db.Uuid
+  exposedUserId String     @db.Uuid
+  triggeredById String     @db.Uuid
+  createdAt     DateTime   @default(now())
+  resolvedAt    DateTime?
+  resolvedById  String?    @db.Uuid
+
+  @@index([credentialId])
+  @@index([resolvedAt])
+  @@map("rotation_tasks")
+}
+
+// No foreign keys on purpose: history must never block changes or disappear with them.
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  userId     String?     @db.Uuid // null for a failed login
+  action     AuditAction
+  targetType String?
+  targetId   String?     @db.Uuid
+  metadata   Json? // IP, user agent
+  createdAt  DateTime    @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+  @@map("audit_log")
+}
