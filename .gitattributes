@@ -1,0 +1,3 @@
+# Keep LF in the repo; scripts must stay LF
+* text=auto eol=lf
+*.zip binary
