@@ -3,8 +3,9 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module.js';
+import { configureApp } from './../src/app.setup.js';
 
-// Uses the real database: start it first with `docker compose up -d` at the repo root.
+// Uses the test database (see test/global-setup.ts). Start PostgreSQL first: `docker compose up -d`.
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
 
@@ -14,10 +15,11 @@ describe('AppController (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    configureApp(app);
     await app.init();
   });
 
-  it('/health (GET) reaches the database', () => {
+  it('/health (GET) reaches the database without a session', () => {
     return request(app.getHttpServer())
       .get('/health')
       .expect(200)
