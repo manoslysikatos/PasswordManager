@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { type AuthUser, CurrentUser, Public, RequirePermission, requestMeta } from '../common/auth.decorators.js';
+import { RateLimit } from '../common/rate-limit.js';
 import { AuthService } from './auth.service.js';
 import { REFRESH_COOKIE } from './cookies.js';
 import { CreateInvitationDto, LoginDto, PreloginDto, RegisterDto, SetupDto } from './dto.js';
@@ -23,6 +24,7 @@ export class SetupController {
   }
 
   @Public()
+  @RateLimit(10)
   @Post()
   create(@Body() dto: SetupDto) {
     return this.setup.setup(dto);
@@ -40,6 +42,7 @@ export class InvitationsController {
   }
 
   @Public()
+  @RateLimit(30)
   @Get(':token')
   describe(@Param('token') token: string) {
     return this.invitations.describe(token);
@@ -54,12 +57,14 @@ export class AuthController {
   ) {}
 
   @Public()
+  @RateLimit(10)
   @Post('register')
   register(@Body() dto: RegisterDto) {
     return this.invitations.accept(dto);
   }
 
   @Public()
+  @RateLimit(20, 'ip+email')
   @HttpCode(200)
   @Post('prelogin')
   prelogin(@Body() dto: PreloginDto) {
@@ -67,6 +72,7 @@ export class AuthController {
   }
 
   @Public()
+  @RateLimit(10, 'ip+email')
   @HttpCode(200)
   @Post('login')
   login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
