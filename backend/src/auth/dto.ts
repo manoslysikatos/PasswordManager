@@ -16,7 +16,7 @@ import {
 
 // The server cannot check what is inside the keys (they are encrypted in the browser), only that
 // each field has the right shape and a sane size.
-const KEY_MAX = 8192;
+export const KEY_MAX = 8192;
 
 const normalizeEmail = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().toLowerCase() : value;

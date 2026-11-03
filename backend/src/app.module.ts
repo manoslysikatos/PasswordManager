@@ -13,6 +13,8 @@ import { ACCESS_TTL_SECONDS } from './auth/cookies.js';
 import { RATE_LIMIT_MESSAGE, RATE_LIMIT_WINDOW_MS } from './common/rate-limit.js';
 import { validateEnv } from './config/env.validation.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { RolesModule } from './roles/roles.module.js';
+import { UsersModule } from './users/users.module.js';
 
 @Module({
   imports: [
@@ -38,6 +40,8 @@ import { PrismaModule } from './prisma/prisma.module.js';
     PrismaModule,
     AuditModule,
     AuthModule,
+    RolesModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [

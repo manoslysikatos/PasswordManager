@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthUser } from '../common/auth.decorators.js';
 import { hashVerifier, randomToken, sha256 } from '../common/crypto.js';
+import { assertHoldsAll } from '../common/permissions.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateInvitationDto, RegisterDto } from './dto.js';
 import { createPersonalVault } from './personal-vault.js';
@@ -23,10 +24,10 @@ export class InvitationsService {
     if (existing && existing.status !== 'INVITED') {
       throw new ConflictException('A user with this email already exists');
     }
-    const roleIds = dto.roleIds ?? [];
-    if (roleIds.length > 0 && (await this.prisma.role.count({ where: { id: { in: roleIds } } })) !== roleIds.length) {
-      throw new BadRequestException('Unknown role');
-    }
+    const roleIds = [...new Set(dto.roleIds ?? [])];
+    const roles = await this.prisma.role.findMany({ where: { id: { in: roleIds } }, include: { permissions: true } });
+    if (roles.length !== roleIds.length) throw new BadRequestException('Unknown role');
+    assertHoldsAll(invitedBy, roles.flatMap((role) => role.permissions.map((p) => p.permission)));
 
     const token = randomToken();
     const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
