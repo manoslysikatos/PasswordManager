@@ -1,13 +1,12 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthUser } from '../common/auth.decorators.js';
 import { assertHoldsAll } from '../common/permissions.js';
+import { flagForRotation, isOrgAdmin, unreachableBy } from '../common/rotation.js';
+import { manageableVaults } from '../common/vault-access.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AssignRoleDto } from './dto.js';
-import { flagForRotation } from './rotation.js';
-
-const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
 @Injectable()
 export class UsersService {
@@ -33,9 +32,9 @@ export class UsersService {
   }
 
   /**
-   * Gives a role, together with the keys it needs (decision 0012: access is usable immediately).
-   * A user who has not registered yet has no public key, so nothing can be locked for them: the
-   * role is saved and the keys follow later (pending assignment).
+   * Gives a role, together with whatever keys the caller's browser can lock right away (decision 0012).
+   * Missing keys wait in GET /keys/pending: the user has not registered yet (no public key), or the
+   * caller cannot open the role's vaults (e.g. HR with MANAGE_USERS only).
    */
   async assignRole(userId: string, dto: AssignRoleDto, actor: AuthUser) {
     const result = await this.prisma.$transaction(async (tx) => {
@@ -49,17 +48,20 @@ export class UsersService {
       assertHoldsAll(actor, permissions);
       if (user.roles.some((r) => r.roleId === role.id)) throw new ConflictException('The user already has this role');
 
-      const pending = user.publicKey === null;
-      const needsOrgKey = !pending && permissions.includes('ORG_ADMIN') && !user.orgKeyGrant;
-      if (needsOrgKey !== (dto.encryptedOrgPrivateKey !== undefined)) {
-        throw new BadRequestException(
-          needsOrgKey ? 'This role needs the organization key locked for the user' : 'No organization key is expected',
-        );
-      }
-      const neededVaults = pending ? [] : role.vaultGrants.map((g) => g.vaultId);
+      // Keys can only be locked for a user who has a public key, i.e. has registered.
+      const registered = user.publicKey !== null;
+      const needsOrgKey = registered && permissions.includes('ORG_ADMIN') && !user.orgKeyGrant;
+      const neededVaults = registered ? role.vaultGrants.map((g) => g.vaultId) : [];
       const sentVaults = (dto.vaultKeys ?? []).map((k) => k.vaultId);
-      if (!sameSet(neededVaults, sentVaults)) {
-        throw new BadRequestException('Send exactly one vault key for each vault of this role');
+
+      if (dto.encryptedOrgPrivateKey !== undefined && !needsOrgKey) throw new BadRequestException('No organization key is expected');
+      if (sentVaults.some((vaultId) => !neededVaults.includes(vaultId))) {
+        throw new BadRequestException('A vault key was sent for a vault this role does not open');
+      }
+      // A key can only come from a browser that can open the vault; anything else would be garbage.
+      if (sentVaults.length > 0) {
+        const manageable = await tx.vault.count({ where: { AND: [{ id: { in: sentVaults } }, await manageableVaults(tx, actor.id)] } });
+        if (manageable !== sentVaults.length) throw new ForbiddenException('You can only lock keys of vaults you manage');
       }
 
       await tx.userRole.create({ data: { userId, roleId: role.id } });
@@ -79,8 +81,9 @@ export class UsersService {
           })),
         });
       }
-      const keysPending = pending && (permissions.includes('ORG_ADMIN') || role.vaultGrants.length > 0);
-      return { userId, roleId: role.id, keysPending };
+      // Whatever was not sent now waits in GET /keys/pending for someone who can lock it.
+      const orgKeyMissing = permissions.includes('ORG_ADMIN') && !user.orgKeyGrant && dto.encryptedOrgPrivateKey === undefined;
+      return { userId, roleId: role.id, keysPending: orgKeyMissing || sentVaults.length < role.vaultGrants.length };
     });
 
     await this.audit.log('ROLE_ASSIGNED', { userId: actor.id, targetType: 'user', targetId: userId, metadata: { roleId: dto.roleId } });
@@ -109,13 +112,10 @@ export class UsersService {
         );
         await tx.vaultKey.deleteMany({ where: { userId, viaRoleId: roleId } });
 
-        const stillOrgAdmin =
-          (await tx.rolePermission.count({ where: { permission: 'ORG_ADMIN', role: { users: { some: { userId } } } } })) > 0;
         // A user who can still open everything has lost nothing.
-        if (stillOrgAdmin) return 0;
+        if (await isOrgAdmin(tx, userId)) return 0;
 
-        // Credentials in vaults the user can no longer open (through another role, or directly).
-        const unreachable: Prisma.CredentialWhereInput = { vault: { keys: { none: { userId } } } };
+        const unreachable = unreachableBy(userId);
         if (permissions.includes('ORG_ADMIN')) {
           if ((await this.countActiveOrgAdmins(tx)) === 0) {
             throw new ConflictException('The organization needs at least one active admin');

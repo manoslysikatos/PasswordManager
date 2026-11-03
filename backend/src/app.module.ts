@@ -14,7 +14,9 @@ import { RATE_LIMIT_MESSAGE, RATE_LIMIT_WINDOW_MS } from './common/rate-limit.js
 import { validateEnv } from './config/env.validation.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RolesModule } from './roles/roles.module.js';
+import { KeysModule } from './keys/keys.module.js';
 import { UsersModule } from './users/users.module.js';
+import { VaultsModule } from './vaults/vaults.module.js';
 
 @Module({
   imports: [
@@ -42,6 +44,8 @@ import { UsersModule } from './users/users.module.js';
     AuthModule,
     RolesModule,
     UsersModule,
+    KeysModule,
+    VaultsModule,
   ],
   controllers: [AppController],
   providers: [

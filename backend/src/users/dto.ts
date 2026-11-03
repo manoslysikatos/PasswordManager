@@ -9,9 +9,9 @@ export class WrappedVaultKeyDto {
 }
 
 /**
- * The role, plus the keys the user needs to actually use it, so policy and crypto change together:
+ * The role, plus the keys the caller can already lock for the user (the rest stay pending):
  * - `encryptedOrgPrivateKey`: when the role brings ORG_ADMIN and the user does not have the org key yet
- * - `vaultKeys`: one for each vault the role opens
+ * - `vaultKeys`: for vaults of the role that the caller manages
  */
 export class AssignRoleDto {
   @IsUUID() roleId!: string;

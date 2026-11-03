@@ -144,8 +144,9 @@ describe('Roles and assignments (e2e)', () => {
       await prisma.vaultRoleGrant.create({ data: { vaultId: devVault.vault.id, roleId: ids.devs, accessLevel: 'EDITOR', grantedById: admin.id } });
     });
 
-    it('requires exactly one vault key per vault of the role', async () => {
-      await adminAgent.post(`/users/${dev.id}/roles`).send({ roleId: ids.devs }).expect(400);
+    it('rejects keys the role does not need, and duplicates', async () => {
+      const other = await vaultWithCredentials('Unrelated', admin.id, 0);
+      await adminAgent.post(`/users/${dev.id}/roles`).send({ roleId: ids.devs, vaultKeys: [{ vaultId: other.vault.id, encryptedVaultKey: 'a' }] }).expect(400);
       await adminAgent
         .post(`/users/${dev.id}/roles`)
         .send({ roleId: ids.devs, vaultKeys: [{ vaultId: devVault.vault.id, encryptedVaultKey: 'a' }, { vaultId: devVault.vault.id, encryptedVaultKey: 'b' }] })
@@ -169,9 +170,11 @@ describe('Roles and assignments (e2e)', () => {
       expect(await prisma.vaultKey.count({ where: { userId: newbie.id } })).toBe(0);
     });
 
-    it('needs the organization key when the role brings ORG_ADMIN', async () => {
-      await adminAgent.post(`/users/${dev.id}/roles`).send({ roleId: ids.admin }).expect(400);
-      await adminAgent.post(`/users/${dev.id}/roles`).send({ roleId: ids.admin, encryptedOrgPrivateKey: `rsa.${b64()}` }).expect(201);
+    it('locks the organization key for a new org admin, and only then', async () => {
+      const hrRoleUser = await createUser('kostas@example.com');
+      await adminAgent.post(`/users/${hrRoleUser.id}/roles`).send({ roleId: ids.hr, encryptedOrgPrivateKey: `rsa.${b64()}` }).expect(400);
+      const res = await adminAgent.post(`/users/${dev.id}/roles`).send({ roleId: ids.admin, encryptedOrgPrivateKey: `rsa.${b64()}` }).expect(201);
+      expect(res.body.keysPending).toBe(false);
       expect(await prisma.orgKeyGrant.findUnique({ where: { userId: dev.id } })).not.toBeNull();
       const me = await (await signIn(dev.email, dev.authVerifier)).get('/auth/me').expect(200);
       expect(me.body.permissions).toContain('ORG_ADMIN');

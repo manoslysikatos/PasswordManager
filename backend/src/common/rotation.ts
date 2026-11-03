@@ -28,3 +28,11 @@ export async function flagForRotation(
   });
   return exposed.length;
 }
+
+/** Credentials in vaults the user can no longer open with a vault key (through a role, or directly). */
+export const unreachableBy = (userId: string): Prisma.CredentialWhereInput => ({ vault: { keys: { none: { userId } } } });
+
+/** An org admin can open every vault through the organization key, so losing one way in costs nothing. */
+export async function isOrgAdmin(tx: Prisma.TransactionClient, userId: string): Promise<boolean> {
+  return (await tx.rolePermission.count({ where: { permission: 'ORG_ADMIN', role: { users: { some: { userId } } } } })) > 0;
+}
